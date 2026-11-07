@@ -1,9 +1,12 @@
 name: Release CLI
 
-# Push a tag like v0.2.0 (and cli/v0.2.0 for `go install`) to publish binaries.
+# Bump cli/VERSION on master to publish a release: binaries for every platform,
+# a SHA256SUMS file, the vX.Y.Z tag and a cli/vX.Y.Z tag for `go install`.
 on:
   push:
-    tags: ['v*']
+    branches: [master]
+    paths: [cli/VERSION]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,26 +14,44 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        run: |
+          version=$(tr -d '[:space:]' < cli/VERSION)
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "cli/VERSION must be X.Y.Z, got '$version'" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-go@v5
+        if: steps.version.outputs.exists != 'true'
         with:
           go-version-file: cli/go.mod
           cache: false
       - name: Test
+        if: steps.version.outputs.exists != 'true'
         working-directory: cli
         run: go vet ./... && go test ./...
       - name: Cross-compile
+        if: steps.version.outputs.exists != 'true'
         working-directory: cli
         run: |
           mkdir -p ../dist-cli
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=".exe"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" \
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }}" \
               -o ../dist-cli/wardenbroker-$os-$arch$ext ./cmd/wardenbroker
           done
           cd ../dist-cli && sha256sum wardenbroker-* > SHA256SUMS && cat SHA256SUMS
       - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist-cli/* --title "$GITHUB_REF_NAME" --generate-notes
+        if: steps.version.outputs.exists != 'true'
+        run: |
+          version=${{ steps.version.outputs.version }}
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/cli/v$version" -f "sha=$GITHUB_SHA" >/dev/null
+          gh release create "v$version" dist-cli/* --target "$GITHUB_SHA" --title "v$version" --generate-notes

@@ -122,7 +122,8 @@ to pin a release or `WARDENBROKER_INSTALL_DIR` to install elsewhere. Windows bin
 go install github.com/MeLlamoPablo/WardenBroker/cli/cmd/wardenbroker@latest
 ```
 
-**Releasing:** push a `vX.Y.Z` tag to publish binaries, plus `cli/vX.Y.Z` so `go install …@latest` resolves to it.
+**Releasing:** bump `cli/VERSION` on `master`. CI tests and builds every platform, then publishes the `vX.Y.Z` release
+and a `cli/vX.Y.Z` tag, so `go install …@latest` resolves to it too.
 
 ```bash
 wardenbroker register --url https://wardenbroker.you.workers.dev --name "build-box"
