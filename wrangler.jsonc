@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wardenbroker",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-10-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "BROKER", "class_name": "Broker" }]
+  },
+  // SQLite-backed Durable Objects are available on the Workers Free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Broker"] }],
+  "vars": {
+    // The Bitwarden account allowed to own this broker. Required.
+    "OWNER_EMAIL": "",
+    // Your Bitwarden-compatible server: https://vault.bitwarden.com,
+    // https://vault.bitwarden.eu, or a self-hosted Vaultwarden/NodeWarden URL.
+    "BW_SERVER": "https://vault.bitwarden.com"
+  },
+  "observability": { "enabled": true }
+}
