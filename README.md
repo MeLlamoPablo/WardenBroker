@@ -3,7 +3,7 @@
 **Let your self-hosted agents use your Bitwarden vault — one tap on your phone at a time.**
 
 An agent asks for a secret by host and says why. Your phone buzzes. You see who's asking, for what and why. WardenBroker has
-already found the matching Bitwarden item. You approve once, for an hour, a day, a week or for good, and the secret is
+already found the matching Bitwarden item. You approve it for 5 minutes, an hour, a day, a week or for good, and the secret is
 encrypted on your phone straight to that agent's key. The broker in the middle only ever relays ciphertext.
 
 ```
@@ -44,8 +44,8 @@ gh-pass-123
 3. **Approval.** The PWA matches the host against your vault, using Bitwarden's own URI match rules. It picks the item
    automatically when exactly one fits best, and lets you search otherwise. It then encrypts the item to the agent's
    public key: ECIES with P-256, HKDF-SHA256 and AES-256-GCM, bound to the host.
-4. **Delivery.** The broker hands the ciphertext to the agent once. If you chose a duration, it also keeps a copy until the
-   grant expires or you revoke it.
+4. **Delivery.** The broker passes the ciphertext to the waiting agent and keeps it as a *grant* for the duration you
+   chose. Until the grant expires or you revoke it, that agent's requests for that host are answered without asking you.
 
 ### Security model
 

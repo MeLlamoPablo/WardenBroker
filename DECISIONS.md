@@ -103,19 +103,26 @@ only carries the agent name, the host and the reason. **It appears on your lock 
   automatically only when it's unique; otherwise you pick, from the candidates or from a search. "Registrable domain" uses
   a small list of common second-level suffixes (`co.uk`, `com.au`, …) rather than the full Public Suffix List, to keep the
   bundle small.
-- **TOTP codes are computed on the agent** from the seed, so they work for the whole grant duration.
+- **TOTP codes are computed by the `wardenbroker` CLI** from the seed (`--field totp`), so they work for the whole grant
+  duration.
 
-### 11. Durations: Once, 1 hour (default), 1 day, 1 week, Always
+### 11. Durations: 5 minutes, 1 hour (default), 1 day, 1 week, Always
 
-The spec says "a given amount of time, or permanently". I added **Once** (no stored grant) and made **1 hour** the
-default, because agents tend to need the same credential several times during one task. Grants are keyed by
-(agent, host). A grant is a *snapshot*: if you change the password in Bitwarden, revoke the grant and the agent will ask
-again.
+The spec says "a given amount of time, or permanently". **1 hour** is the default, because agents tend to need the same
+credential several times during one task. There is deliberately no single-use option: an agent that fails a step and
+retries would have to ask again. **5 minutes** is the shortest choice, and the broker rejects anything under a minute.
+Grants are keyed by (agent, host). A grant is a *snapshot*: if you change the password in Bitwarden, revoke the grant and
+the agent will ask again.
 
-### 12. The broker hands over ciphertext once
+### 12. How long the broker keeps ciphertext
 
-A delivered request has its ciphertext wiped. Answered requests lose their ciphertext after at most an hour even if never
-collected, and request rows are deleted after 7 days. Grants keep their own copy until they expire or are revoked.
+Every approval stores the sealed item as a **grant** for the duration you chose: a 1-week approval keeps it for the week,
+and every request from that agent for that host is answered from it. Expired grants are deleted on the next request to
+the broker.
+
+The approval also writes a second, short-lived copy on the request itself. That copy is a mailbox for the agent's
+waiting long-poll: it's wiped as soon as the agent collects it, or after an hour if it never does. Request rows are
+deleted after 7 days.
 
 ### 13. The UI really is just two screens
 

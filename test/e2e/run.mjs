@@ -257,7 +257,7 @@ async function main() {
   })
 
   console.log('\nSecret exchange')
-  const approve = async (host, { duration = 'Once', pick } = {}) => {
+  const approve = async (host, { duration = '1 hour', pick } = {}) => {
     await reload()
     await page.locator('h2.host', { hasText: host }).waitFor()
     if (pick) await page.getByRole('button', { name: new RegExp(`^${pick}`) }).click()
@@ -266,7 +266,7 @@ async function main() {
     await page.locator('h2.host').waitFor({ state: 'detached' })
   }
 
-  await step('a request is auto-matched to the vault item, approved once, decrypted by the CLI', async () => {
+  await step('a request is auto-matched to the vault item, approved for 5 minutes, decrypted by the CLI', async () => {
     const get = cli(['get', 'github.com', '--reason', 'push the release branch'])
     await get.waitFor(/Waiting for approval/)
     await reload()
@@ -274,16 +274,17 @@ async function main() {
     await page.getByRole('button', { name: /^GitHub/ }).waitFor()
     await page.getByText(/Shares username, password, TOTP seed/).waitFor()
     await shot('secret-request')
-    await approve('github.com')
+    assert.equal(await page.getByRole('radio', { name: 'Once' }).count(), 0, 'no single-use option')
+    assert.equal(await page.getByRole('radio', { name: '1 hour' }).getAttribute('aria-checked'), 'true', '1 hour is the default')
+    await approve('github.com', { duration: '5 min' })
     assert.equal(await finished(get), 0, get.stderr)
     assert.equal(get.stdout.trim(), 'gh-pass-123')
   })
 
-  await step('"once" leaves no standing access: the next request asks again', async () => {
+  await step('a retry within the grant needs no new approval; the CLI computes the TOTP code', async () => {
     const get = cli(['get', 'https://github.com/settings', '--field', 'totp', '--reason', 'log in'])
-    await get.waitFor(/Waiting for approval/)
-    await approve('github.com', { duration: '1 hour' })
-    assert.equal(await finished(get), 0, get.stderr)
+    assert.equal(await finished(get, 5000), 0, get.stderr)
+    assert.ok(!get.stderr.includes('Waiting'), 'served from the 5-minute grant')
     const code = get.stdout.trim()
     assert.match(code, /^\d{6}$/)
     const window = [Date.now() - 30000, Date.now(), Date.now() + 30000].map((ts) => {
@@ -344,6 +345,13 @@ async function main() {
     await get.waitFor(/Waiting for approval/)
     await reload()
     await page.getByText(/No vault item matches nothing.example/).waitFor()
+    const status = await page.evaluate(async () => {
+      const state = await (await fetch('/api/app/state')).json()
+      const id = state.pendingRequests[0].id
+      const r = await fetch(`/api/app/requests/${id}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ciphertext: 'AAAA', itemName: 'x', duration: 0 }) })
+      return r.status
+    })
+    assert.equal(status, 400, 'the broker refuses single-use (0 second) grants')
     await button('Deny').click()
     assert.equal(await finished(get), 3)
     assert.match(get.stderr, /denied/)

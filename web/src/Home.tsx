@@ -164,7 +164,7 @@ function AgentApproval({ agent, remaining, onDone }: { agent: Agent; remaining: 
 }
 
 const DURATIONS = [
-  { label: 'Once', value: 0 },
+  { label: '5 min', value: 300 },
   { label: '1 hour', value: 3600 },
   { label: '1 day', value: 86400 },
   { label: '1 week', value: 7 * 86400 },

@@ -446,12 +446,15 @@ export class Broker extends DurableObject<Env> {
     const ciphertext = String(body.ciphertext || '')
     if (!ciphertext || ciphertext.length > MAX_CIPHERTEXT || !/^[A-Za-z0-9_-]+$/.test(ciphertext)) throw new HttpError(400, 'invalid ciphertext')
     const itemName = String(body.itemName || '').slice(0, 200)
-    // duration: seconds; 0 = this request only; -1 = until revoked
-    const duration = Number(body.duration ?? 0)
-    if (!Number.isInteger(duration) || duration < -1 || duration > 365 * 24 * 3600) throw new HttpError(400, 'invalid duration')
+    // duration: seconds (at least a minute, so an agent can retry a failed step
+    // without asking again), or -1 = until revoked
+    const duration = Number(body.duration ?? 3600)
+    if (!Number.isInteger(duration) || (duration !== -1 && (duration < 60 || duration > 365 * 24 * 3600))) {
+      throw new HttpError(400, 'duration must be -1 (until revoked) or 60 seconds to a year')
+    }
     const t = now()
     this.run("UPDATE requests SET status = 'approved', ciphertext = ?, item_name = ?, duration = ?, resolved_at = ? WHERE id = ?", ciphertext, itemName, duration, t, request.id)
-    if (duration !== 0) {
+    {
       this.run(
         `INSERT INTO grants (id, agent_id, host, ciphertext, item_name, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(agent_id, host) DO UPDATE SET id = excluded.id, ciphertext = excluded.ciphertext, item_name = excluded.item_name,
@@ -647,7 +650,6 @@ export class Broker extends DurableObject<Env> {
 }
 
 function describeDuration(seconds: number): string {
-  if (seconds === 0) return 'once'
   if (seconds === -1) return 'until revoked'
   if (seconds % 86400 === 0) return `${seconds / 86400}d`
   if (seconds % 3600 === 0) return `${seconds / 3600}h`
