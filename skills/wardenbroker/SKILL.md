@@ -8,6 +8,20 @@ description: Get credentials (passwords, API keys, tokens, TOTP codes) from the 
 The `wardenbroker` CLI asks the user's phone for a secret from their Bitwarden vault. The user sees your request, your
 reason, and approves or denies it. Approved secrets are end-to-end encrypted to this machine.
 
+## Setup
+
+If `wardenbroker` isn't installed, install the prebuilt binary (no Go needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MeLlamoPablo/WardenBroker/master/install.sh | sh
+```
+
+Then ask the user for their broker URL and register (they approve on their phone):
+
+```bash
+wardenbroker register --url <broker url> --name <a name for this agent>
+```
+
 ## Rules
 
 1. **Never ask the user to paste a secret into the conversation.** Request it with `wardenbroker`.

@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-var version = "0.1.0"
+var version = "dev" // set by -ldflags in release builds
 
 const (
 	exitError    = 1

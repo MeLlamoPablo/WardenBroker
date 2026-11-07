@@ -73,7 +73,7 @@ gh-pass-123
 
 ## Setup
 
-You need a Cloudflare account (the Free plan is enough), Node 22+ and Go 1.24+ for the CLI.
+You need a Cloudflare account (the Free plan is enough) and Node 22+.
 
 ```bash
 git clone https://github.com/MeLlamoPablo/WardenBroker && cd WardenBroker
@@ -108,9 +108,21 @@ still works: you unlock with your master password each time.
 
 ## The agent CLI
 
+Install the prebuilt binary (Linux and macOS, x86-64 and ARM) into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MeLlamoPablo/WardenBroker/master/install.sh | sh
+```
+
+The script verifies the binary against the release's `SHA256SUMS`. Re-run it to update; set `WARDENBROKER_VERSION=v0.1.0`
+to pin a release or `WARDENBROKER_INSTALL_DIR` to install elsewhere. Windows binaries, and every other build, are on the
+[releases page](https://github.com/MeLlamoPablo/WardenBroker/releases). With Go 1.24+ you can also build it yourself:
+
 ```bash
 go install github.com/MeLlamoPablo/WardenBroker/cli/cmd/wardenbroker@latest
 ```
+
+**Releasing:** push a `vX.Y.Z` tag to publish binaries, plus `cli/vX.Y.Z` so `go install …@latest` resolves to it.
 
 ```bash
 wardenbroker register --url https://wardenbroker.you.workers.dev --name "build-box"
