@@ -32,9 +32,10 @@ export async function passkeyLogin(preferredId?: string | null): Promise<Passkey
       challenge: fromB64(opts.challenge),
       allowCredentials: ids.map((id) => ({ type: 'public-key' as const, id: fromB64(id) })),
       userVerification: 'required',
+      hints: ['client-device'],
       timeout: 120000,
       extensions: { prf: { eval: { first: PRF_SALT } } } as any,
-    },
+    } as PublicKeyCredentialRequestOptions,
   })) as PublicKeyCredential | null
   if (!cred) throw new Error('No passkey was used')
   const res = cred.response as AuthenticatorAssertionResponse
@@ -66,10 +67,17 @@ export async function passkeyRegister(): Promise<PasskeyResult> {
       user: { id: utf8(opts.user.id), name: opts.user.name, displayName: opts.user.displayName },
       pubKeyCredParams: opts.algorithms.map((alg) => ({ type: 'public-key' as const, alg })),
       excludeCredentials: opts.excludeCredentials.map((id) => ({ type: 'public-key' as const, id: fromB64(id) })),
-      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      // Create on this phone (Google Password Manager, iCloud Keychain, or the
+      // phone's chosen passkey provider) rather than offering QR codes and
+      // security keys first.
+      authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+      hints: ['client-device'],
       timeout: 120000,
-      extensions: { prf: { eval: { first: PRF_SALT } } } as any,
-    },
+      // Only ask for PRF support here. Some providers (notably on Android)
+      // refuse to evaluate PRF during creation; the secret is read on the
+      // first sign-in instead (see enablePasskey).
+      extensions: { prf: {} },
+    } as PublicKeyCredentialCreationOptions,
   })) as PublicKeyCredential | null
   if (!cred) throw new Error('No passkey was created')
   const res = cred.response as AuthenticatorAttestationResponse
