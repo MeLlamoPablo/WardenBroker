@@ -55,6 +55,11 @@ export const ACCOUNT = {
 
 export const ITEM_TOTP_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
 
+export const CARDS = {
+  personal: { name: 'Personal Visa', cardholderName: 'Ada Lovelace', brand: 'Visa', number: '4111111111111111', expMonth: '4', expYear: '2029', code: '737' },
+  claw: { name: 'Claw Credit Card', cardholderName: 'Claw Bot', brand: 'Mastercard', number: '5555555555554444', expMonth: '12', expYear: '2030', code: '321' },
+}
+
 export async function startMockBitwarden(port) {
   const masterKey = await pbkdf2(te.encode(ACCOUNT.password), te.encode(ACCOUNT.email), ACCOUNT.iterations)
   const hash = b64(await pbkdf2(masterKey, te.encode(ACCOUNT.password), 1))
@@ -88,6 +93,22 @@ export async function startMockBitwarden(port) {
     ...extra,
   })
 
+  // Card items (type 3) keep their data in Card, not Login, and have no URIs.
+  const card = async (key, { name, ...fields }) => ({
+    Id: globalThis.crypto.randomUUID(),
+    Type: 3,
+    Name: await encrypt(name, key),
+    Notes: null,
+    Login: null,
+    Card: Object.fromEntries(
+      await Promise.all(Object.entries(fields).map(async ([k, v]) => [k.charAt(0).toUpperCase() + k.slice(1), v ? await encrypt(v, key) : null])),
+    ),
+    Fields: [],
+    OrganizationId: null,
+    DeletedDate: null,
+    Key: null,
+  })
+
   const ciphers = [
     await login(userKey, { name: 'GitHub', username: 'octocat', password: 'gh-pass-123', totp: ITEM_TOTP_SECRET, uris: ['https://github.com/login'] }),
     await login(itemKey, { name: 'GitLab work', username: 'me', password: 'gl-pass-456', uris: ['gitlab.com'] }, { Key: await encrypt(itemKeyBytes, userKey) }),
@@ -97,6 +118,8 @@ export async function startMockBitwarden(port) {
     await login(userKey, { name: 'OpenAI', uris: ['https://api.openai.com'], fields: [{ name: 'API Key', value: 'sk-test-789' }], notes: 'project: e2e' }),
     await login(userKey, { name: 'Deleted thing', password: 'nope', uris: ['https://deleted.example'] }, { DeletedDate: new Date().toISOString() }),
     await login(orgKey, { name: 'Org DB', username: 'dbadmin', password: 'org-db-pass', uris: ['db.internal.example'] }, { OrganizationId: 'org-1' }),
+    await card(userKey, CARDS.personal),
+    await card(userKey, CARDS.claw),
   ]
 
   const sync = {

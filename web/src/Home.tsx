@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Config } from './App'
-import { api, type Agent, type AppState, type LogEntry, type PendingRequest } from './api'
-import { candidatesFor, type VaultItem } from './bw'
+import { api, CARD_TARGET, describeTarget, type Agent, type AppState, type LogEntry, type PendingRequest } from './api'
+import { candidatesFor, cardCandidates, type VaultItem } from './bw'
 import { utf8 } from './bytes'
 import { currentSubscription, enablePush, pushSupported } from './push'
 import { seal } from './seal'
@@ -173,6 +173,12 @@ const DURATIONS = [
 
 function sharedFields(item: VaultItem): string[] {
   const out: string[] = []
+  if (item.card) {
+    if (item.card.number) out.push('card number')
+    if (item.card.cardholderName) out.push('cardholder')
+    if (item.card.expMonth || item.card.expYear) out.push('expiry')
+    if (item.card.code) out.push('security code')
+  }
   if (item.username) out.push('username')
   if (item.password) out.push('password')
   if (item.totp) out.push('TOTP seed')
@@ -181,12 +187,17 @@ function sharedFields(item: VaultItem): string[] {
   return out
 }
 
+function cardSummary(card: NonNullable<VaultItem['card']>): string {
+  const last4 = card.number.replace(/\D/g, '').slice(-4)
+  return [card.brand || 'Card', last4 && `•••• ${last4}`].filter(Boolean).join(' ')
+}
+
 function ItemRow({ item, selected, onSelect }: { item: VaultItem; selected: boolean; onSelect: () => void }) {
   return (
     <button type="button" className={`item ${selected ? 'selected' : ''}`} onClick={onSelect} aria-pressed={selected}>
       <span className="item-name">{item.name || '(no name)'}</span>
       <span className="item-meta">
-        {item.username || item.uris[0]?.uri || ' '}
+        {(item.card && cardSummary(item.card)) || item.username || item.uris[0]?.uri || ' '}
         {item.organization ? ` · ${item.organization}` : ''}
       </span>
     </button>
@@ -204,7 +215,12 @@ function SecretApproval({
   remaining: number
   onDone: () => void
 }) {
-  const { items: candidates, autoPick } = useMemo(() => candidatesFor(session.items, request.host), [session.items, request.host])
+  const isCard = request.host === CARD_TARGET
+  // Cards are never matched to a host: list them all and always make the user pick.
+  const { items: candidates, autoPick } = useMemo(
+    () => (isCard ? { items: cardCandidates(session.items), autoPick: null } : candidatesFor(session.items, request.host)),
+    [isCard, session.items, request.host],
+  )
   const [selectedId, setSelectedId] = useState<string | null>(autoPick?.id ?? null)
   const [picking, setPicking] = useState(!autoPick)
   const [query, setQuery] = useState('')
@@ -238,6 +254,7 @@ function SecretApproval({
           uris: selected.uris.map((u) => u.uri),
           notes: selected.notes,
           fields: selected.fields,
+          ...(selected.card ? { card: selected.card } : {}),
         },
         approvedAt: Date.now(),
       }
@@ -264,9 +281,10 @@ function SecretApproval({
   return (
     <Card className="approval">
       <p className="eyebrow">
-        Secret request{remaining > 1 ? ` · ${remaining} waiting` : ''} · {until(request.expires_at)}
+        {isCard ? 'Card request' : 'Secret request'}
+        {remaining > 1 ? ` · ${remaining} waiting` : ''} · {until(request.expires_at)}
       </p>
-      <h2 className="host">{request.host}</h2>
+      <h2 className="host">{isCard ? 'Payment card' : request.host}</h2>
       <p className="requester">
         <b>{request.agent_name}</b> <Fingerprint value={request.fingerprint} />
       </p>
@@ -280,7 +298,11 @@ function SecretApproval({
       ) : (
         <div className="picker">
           <p className="muted">
-            {candidates.length === 0
+            {isCard
+              ? candidates.length === 0
+                ? 'No cards in your vault. Search for an item:'
+                : 'Pick a card to share:'
+              : candidates.length === 0
               ? `No vault item matches ${request.host}. Search for one:`
               : candidates.length > 1
                 ? `${candidates.length} items match. Pick one:`
@@ -382,7 +404,7 @@ function AgentRow({ agent, open, onToggle, onChange }: { agent: Agent; open: boo
               {agent.grants.map((g) => (
                 <li key={g.id}>
                   <div>
-                    <b>{g.host}</b> → {g.item_name}
+                    <b>{g.host === CARD_TARGET ? 'Payment card' : g.host}</b> → {g.item_name}
                     <div className="fine">
                       {until(g.expires_at)} · used {g.uses}×{g.last_used_at ? `, last ${ago(g.last_used_at)}` : ''}
                     </div>
@@ -411,6 +433,7 @@ function AgentRow({ agent, open, onToggle, onChange }: { agent: Agent; open: boo
 
 function describe(log: LogEntry): { text: string; tone: string } {
   const a = log.agent_name || 'Agent'
+  const t = describeTarget(log.host)
   switch (log.event) {
     case 'agent.registered':
       return { text: `${a} asked to connect`, tone: 'info' }
@@ -421,15 +444,15 @@ function describe(log: LogEntry): { text: string; tone: string } {
     case 'agent.revoked':
       return { text: `${a} was disconnected`, tone: 'bad' }
     case 'secret.requested':
-      return { text: `${a} asked for ${log.host}`, tone: 'info' }
+      return { text: `${a} asked for ${t}`, tone: 'info' }
     case 'secret.approved':
-      return { text: `Shared ${log.host} with ${a}`, tone: 'ok' }
+      return { text: `Shared ${t} with ${a}`, tone: 'ok' }
     case 'secret.denied':
-      return { text: `Denied ${log.host} to ${a}`, tone: 'bad' }
+      return { text: `Denied ${t} to ${a}`, tone: 'bad' }
     case 'secret.served':
-      return { text: `${a} used its access to ${log.host}`, tone: 'ok' }
+      return { text: `${a} used its access to ${t}`, tone: 'ok' }
     case 'grant.revoked':
-      return { text: `Revoked ${a}'s access to ${log.host}`, tone: 'bad' }
+      return { text: `Revoked ${a}'s access to ${t}`, tone: 'bad' }
     case 'login':
       return { text: 'Signed in', tone: 'muted' }
     case 'passkey.added':

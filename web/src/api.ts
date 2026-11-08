@@ -30,6 +30,14 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   return data as T
 }
 
+/** The target of a card request (see worker/util.ts): cards carry no host, the user picks one every time. */
+export const CARD_TARGET = '@card'
+
+/** A request or grant target as it reads mid-sentence: "Shared a payment card with claw". */
+export function describeTarget(target: string | null): string {
+  return target === CARD_TARGET ? 'a payment card' : target || ''
+}
+
 export interface Agent {
   id: string
   name: string

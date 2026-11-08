@@ -105,6 +105,11 @@ only carries the agent name, the host and the reason. **It appears on your lock 
   bundle small.
 - **TOTP codes are computed by the `wardenbroker` CLI** from the seed (`--field totp`), so they work for the whole grant
   duration.
+- **Payment cards aren't requested by host.** A card works on any site, so matching it against the merchant's host is
+  meaningless. `wardenbroker card` sends a host-less request (`kind: "card"`). The phone lists every card item and
+  **never auto-picks**; you choose one each time. The broker stores it under the reserved target `@card` (grants, logs,
+  the seal's associated data), which no normalised host can ever equal. So an agent holds at most one card grant at a
+  time: revoke it to make the agent ask again for a different card.
 
 ### 11. Durations: 5 minutes, 1 hour (default), 1 day, 1 week, Always
 
@@ -156,6 +161,8 @@ is metadata, not a secret, but if you consider item names sensitive, stop sendin
 - **Key rotation of the Bitwarden user key while a passkey blob exists.** If you rotate your account encryption key, sign
   in with the master password once and re-link the passkey (the app offers this).
 - **Multiple owners.** One deployment serves one Bitwarden account.
+- **Identity and SSH key items.** Only their name, notes and custom fields are shared. Logins, secure notes and cards are
+  fully supported.
 
 ## Test-only switch
 

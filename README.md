@@ -43,7 +43,8 @@ gh-pass-123
    (a long poll), so the agent gets the answer the moment you tap.
 3. **Approval.** The PWA matches the host against your vault, using Bitwarden's own URI match rules. It picks the item
    automatically when exactly one fits best, and lets you search otherwise. It then encrypts the item to the agent's
-   public key: ECIES with P-256, HKDF-SHA256 and AES-256-GCM, bound to the host.
+   public key: ECIES with P-256, HKDF-SHA256 and AES-256-GCM, bound to the host. Payment cards are the exception:
+   `wardenbroker card` names no host, and you always pick which card to share.
 4. **Delivery.** The broker passes the ciphertext to the waiting agent and keeps it as a *grant* for the duration you
    chose. Until the grant expires or you revoke it, that agent's requests for that host are answered without asking you.
 
@@ -131,13 +132,18 @@ wardenbroker get github.com --reason "push the release branch"           # print
 wardenbroker get github.com --field totp --reason "log in"               # current TOTP code
 wardenbroker get api.openai.com --field "API Key" --reason "run evals"   # a custom field
 wardenbroker get db.internal --json --reason "inspect the item"         # whole item as JSON
+wardenbroker card --field cvv --reason "pay order #1234 (17.99 EUR) at shop.example"   # you pick the card
 wardenbroker run --reason "deploy" -e GITHUB_TOKEN=github.com -e PGPASSWORD=db.internal -- ./deploy.sh
+wardenbroker run --reason "pay order #1234" -e NUMBER=@card -e EXPIRY=@card:expiry -e CVV=@card:cvv -- ./pay.sh
 wardenbroker status
 wardenbroker forget
 ```
 
 - `--field`: `password` (the default; falls back to the item's only custom field when there's no password), `username`,
   `totp`, `totp-seed`, `notes`, `uri`, or any custom field name.
+- **Cards** aren't tied to a website, so `wardenbroker card` sends no host. Your phone lists every card in the vault and
+  never picks one for you. Card fields: `number` (the default), `cardholder`, `brand`, `expiry` (`MM/YY`), `exp-month`,
+  `exp-year` and `cvv`. In `run`, use `@card` where the host would go.
 - `run` requests every host in parallel, so they all reach your phone together. It then runs the command with the secrets
   in its environment and passes the command's exit code through.
 - Exit codes: `0` ok, `1` error, `2` usage, `3` denied/revoked, `4` timed out/expired. Messages go to stderr, values to
@@ -174,9 +180,9 @@ On `localhost` the PWA also runs in a normal browser tab, so you can develop wit
 
 `npm run test:e2e` starts the real Worker under `wrangler dev`, a mock Bitwarden server and Chromium. The mock uses genuine
 Bitwarden crypto: a PBKDF2 master key, a protected user key, per-item keys and an RSA-wrapped organisation key. Chromium has
-a virtual passkey authenticator with PRF. The suite drives the real PWA and the real Go CLI through 27 steps: 2FA login,
+a virtual passkey authenticator with PRF. The suite drives the real PWA and the real Go CLI through 29 steps: 2FA login,
 passkey setup, agent registration with a decrypted push notification, auto-matched and ambiguous approvals, custom fields,
-org items, grants and revocation, lock/unlock, refresh-token rotation, the master-password fallback, security boundaries,
+org items, host-less card requests, grants and revocation, lock/unlock, refresh-token rotation, the master-password fallback, security boundaries,
 and a scan of the broker's on-disk state for any plaintext secret.
 
 `E2E_SCREENSHOTS=/some/dir` saves screenshots along the way. `E2E_HEADED=1` shows the browser.

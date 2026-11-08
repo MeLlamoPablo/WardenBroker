@@ -70,12 +70,18 @@ const usage = `wardenbroker - let agents use your Bitwarden secrets, with your a
 Usage:
   wardenbroker register --url <broker url> [--name <agent name>]
   wardenbroker get <host> --reason <why> [--field <field>] [--json]
+  wardenbroker card --reason <why> [--field <field>] [--json]
   wardenbroker run --reason <why> -e VAR=<host>[:<field>] [-e ...] -- <command> [args...]
   wardenbroker status
   wardenbroker forget
 
 Fields: password (default), username, totp (current code), totp-seed, notes,
         uri, or the name of any custom field.
+Card fields: number (default), cardholder, brand, expiry (MM/YY), exp-month,
+        exp-year, cvv.
+
+Cards are not tied to a host: ` + "`card`" + ` asks for one and you pick which on your
+phone. In ` + "`run`" + `, use @card as the host: -e CARD_NUMBER=@card:number
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 denied, 4 timed out / expired.
 `
@@ -90,6 +96,8 @@ func run(args []string) error {
 		return cmdRegister(args[1:])
 	case "get":
 		return cmdGet(args[1:])
+	case "card":
+		return cmdCard(args[1:])
 	case "run", "exec":
 		return cmdRun(args[1:])
 	case "status":
@@ -239,6 +247,15 @@ type Field struct {
 	Value string `json:"value"`
 }
 
+type Card struct {
+	CardholderName string `json:"cardholderName"`
+	Brand          string `json:"brand"`
+	Number         string `json:"number"`
+	ExpMonth       string `json:"expMonth"`
+	ExpYear        string `json:"expYear"`
+	Code           string `json:"code"`
+}
+
 type Item struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
@@ -248,6 +265,7 @@ type Item struct {
 	Uris     []string `json:"uris"`
 	Notes    string   `json:"notes"`
 	Fields   []Field  `json:"fields"`
+	Card     *Card    `json:"card,omitempty"`
 }
 
 type Payload struct {
@@ -272,6 +290,28 @@ func activeConfig() (*Config, *ecdh.PrivateKey, error) {
 	return cfg, key, nil
 }
 
+// cardTarget stands in for a host when asking for a payment card. Cards aren't
+// tied to a site, so the request names no host and the user picks the card on
+// their phone. It matches the broker's CARD_TARGET, which is also what the
+// secret is sealed to.
+const cardTarget = "@card"
+
+// resolveTarget turns a user-supplied host (or @card) into the request target.
+func resolveTarget(input string) string {
+	if strings.EqualFold(strings.TrimSpace(input), cardTarget) {
+		return cardTarget
+	}
+	return normalizeHost(input)
+}
+
+// describeTarget is how a target reads in a message.
+func describeTarget(target string) string {
+	if target == cardTarget {
+		return "a payment card"
+	}
+	return target
+}
+
 // normalizeHost mirrors the broker so we can bind the decryption to the same string.
 func normalizeHost(input string) string {
 	raw := strings.ToLower(strings.TrimSpace(input))
@@ -285,14 +325,18 @@ func normalizeHost(input string) string {
 	return strings.TrimSuffix(u.Hostname(), ".")
 }
 
-func requestSecret(cfg *Config, key *ecdh.PrivateKey, host, reason string, timeout time.Duration, announce func()) (*Payload, error) {
-	host = normalizeHost(host)
+func requestSecret(cfg *Config, key *ecdh.PrivateKey, target, reason string, timeout time.Duration, announce func()) (*Payload, error) {
+	host := resolveTarget(target)
 	if host == "" {
 		return nil, fail(exitUsage, "invalid host")
 	}
+	body := map[string]string{"host": host, "reason": reason}
+	if host == cardTarget {
+		body = map[string]string{"kind": "card", "reason": reason}
+	}
 	client := newClient(cfg.URL, cfg.Token)
 	var res secretResponse
-	if _, err := client.do("POST", "/api/agent/requests", map[string]string{"host": host, "reason": reason}, &res); err != nil {
+	if _, err := client.do("POST", "/api/agent/requests", body, &res); err != nil {
 		var api *APIError
 		if errors.As(err, &api) && api.Status == 403 {
 			return nil, fail(exitDenied, "%s", api.Message)
@@ -307,7 +351,7 @@ func requestSecret(cfg *Config, key *ecdh.PrivateKey, host, reason string, timeo
 		id := res.ID
 		for res.Status == "pending" {
 			if time.Now().After(deadline) {
-				return nil, fail(exitTimeout, "timed out waiting for approval of %s", host)
+				return nil, fail(exitTimeout, "timed out waiting for approval of %s", describeTarget(host))
 			}
 			res = secretResponse{}
 			if _, err := client.do("GET", fmt.Sprintf("/api/agent/requests/%s?wait=%d", id, pollWaitSecs), nil, &res); err != nil {
@@ -324,9 +368,9 @@ func requestSecret(cfg *Config, key *ecdh.PrivateKey, host, reason string, timeo
 	switch res.Status {
 	case "approved":
 	case "denied":
-		return nil, fail(exitDenied, "access to %s was denied", host)
+		return nil, fail(exitDenied, "access to %s was denied", describeTarget(host))
 	case "expired":
-		return nil, fail(exitTimeout, "the request for %s expired before it was approved", host)
+		return nil, fail(exitTimeout, "the request for %s expired before it was approved", describeTarget(host))
 	default:
 		return nil, fmt.Errorf("unexpected request status %q", res.Status)
 	}
@@ -346,6 +390,9 @@ func requestSecret(cfg *Config, key *ecdh.PrivateKey, host, reason string, timeo
 
 func pick(item Item, field string) (string, error) {
 	f := strings.ToLower(strings.TrimSpace(field))
+	if v, ok, err := pickCard(item, f); ok {
+		return v, err
+	}
 	switch f {
 	case "", "password":
 		if item.Password != "" || f == "password" {
@@ -353,6 +400,10 @@ func pick(item Item, field string) (string, error) {
 				return "", noField(item, "password")
 			}
 			return item.Password, nil
+		}
+		// A card's main secret is its number.
+		if item.Card != nil && item.Card.Number != "" {
+			return item.Card.Number, nil
 		}
 		// API keys often live in a single custom field or in the notes.
 		if len(item.Fields) == 1 && item.Fields[0].Value != "" {
@@ -395,8 +446,76 @@ func pick(item Item, field string) (string, error) {
 	return "", noField(item, field)
 }
 
+// pickCard handles the card fields of a card item. ok is false when the item
+// isn't a card or f isn't a card field, so a login's custom field called, say,
+// "number" still works.
+func pickCard(item Item, f string) (value string, ok bool, err error) {
+	if item.Card == nil {
+		return "", false, nil
+	}
+	c := *item.Card
+	need := func(name, v string) (string, bool, error) {
+		if v == "" {
+			return "", true, noField(item, name)
+		}
+		return v, true, nil
+	}
+	switch f {
+	case "number", "card-number":
+		return need("number", c.Number)
+	case "cardholder", "cardholder-name", "holder":
+		return need("cardholder", c.CardholderName)
+	case "brand":
+		return need("brand", c.Brand)
+	case "cvv", "cvc", "security-code":
+		return need("cvv", c.Code)
+	case "exp-month":
+		return need("exp-month", expMonth(c.ExpMonth))
+	case "exp-year":
+		return need("exp-year", expYear(c.ExpYear))
+	case "expiry", "exp", "expiration":
+		m, y := expMonth(c.ExpMonth), expYear(c.ExpYear)
+		if m == "" || len(y) < 2 {
+			return need("expiry", "")
+		}
+		return m + "/" + y[len(y)-2:], true, nil
+	}
+	return "", false, nil
+}
+
+// expMonth zero-pads Bitwarden's "1".."12" to the "01".."12" card forms expect.
+func expMonth(m string) string {
+	m = strings.TrimSpace(m)
+	if len(m) == 1 && m[0] >= '1' && m[0] <= '9' {
+		return "0" + m
+	}
+	return m
+}
+
+// expYear expands a two-digit year to four digits.
+func expYear(y string) string {
+	y = strings.TrimSpace(y)
+	if len(y) == 2 {
+		return "20" + y
+	}
+	return y
+}
+
 func available(item Item) []string {
 	var out []string
+	if c := item.Card; c != nil {
+		for _, f := range []struct {
+			name string
+			ok   bool
+		}{
+			{"number", c.Number != ""}, {"cardholder", c.CardholderName != ""}, {"brand", c.Brand != ""},
+			{"expiry", c.ExpMonth != "" && c.ExpYear != ""}, {"cvv", c.Code != ""},
+		} {
+			if f.ok {
+				out = append(out, f.name)
+			}
+		}
+	}
 	if item.Password != "" {
 		out = append(out, "password")
 	}
@@ -423,17 +542,34 @@ func noField(item Item, field string) error {
 }
 
 func cmdGet(args []string) error {
-	fs := flag.NewFlagSet("get", flag.ContinueOnError)
+	return getCommand("get", "<host> ", "password", args)
+}
+
+// cmdCard asks for a payment card. It names no host: the user picks the card.
+func cmdCard(args []string) error {
+	return getCommand("card", "", "number", args)
+}
+
+// getCommand implements `get <host>` and `card`, which differ only in their target.
+func getCommand(name, hostArg, defaultField string, args []string) error {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	reason := fs.String("reason", "", "why you need this secret (shown to the user)")
-	field := fs.String("field", "", "which field to print (default: password)")
+	field := fs.String("field", "", "which field to print (default: "+defaultField+")")
 	asJSON := fs.Bool("json", false, "print the whole item as JSON")
 	timeout := fs.Duration("timeout", 10*time.Minute, "how long to wait for approval")
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(pos) != 1 {
-		return fail(exitUsage, "usage: wardenbroker get <host> --reason <why>")
+	usage := fmt.Sprintf("usage: wardenbroker %s %s--reason <why>", name, hostArg)
+	target := cardTarget
+	if hostArg != "" {
+		if len(pos) != 1 {
+			return fail(exitUsage, "%s", usage)
+		}
+		target = resolveTarget(pos[0])
+	} else if len(pos) != 0 {
+		return fail(exitUsage, "%s (cards aren't tied to a host: you pick the card on your phone)", usage)
 	}
 	if strings.TrimSpace(*reason) == "" {
 		return fail(exitUsage, "--reason is required: tell the user why you need this secret")
@@ -442,8 +578,12 @@ func cmdGet(args []string) error {
 	if err != nil {
 		return err
 	}
-	p, err := requestSecret(cfg, key, pos[0], *reason, *timeout, func() {
-		fmt.Fprintf(stderr, "Waiting for approval of %s on your phone…\n", normalizeHost(pos[0]))
+	p, err := requestSecret(cfg, key, target, *reason, *timeout, func() {
+		if target == cardTarget {
+			fmt.Fprintln(stderr, "Waiting for you to pick a card on your phone…")
+		} else {
+			fmt.Fprintf(stderr, "Waiting for approval of %s on your phone…\n", target)
+		}
 	})
 	if err != nil {
 		return err
@@ -481,7 +621,7 @@ func cmdRun(args []string) error {
 	reason := fs.String("reason", "", "why the command needs these secrets (shown to the user)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "how long to wait for approval")
 	var envs multiFlag
-	fs.Var(&envs, "e", "VAR=host[:field] (repeatable)")
+	fs.Var(&envs, "e", "VAR=host[:field] or VAR=@card[:field] (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return &exitErr{exitUsage, err}
 	}
@@ -511,7 +651,11 @@ func cmdRun(args []string) error {
 	// Ask for every host at once so they all show up on the phone together.
 	hosts := map[string]bool{}
 	for _, s := range specs {
-		hosts[normalizeHost(s.host)] = true
+		target := resolveTarget(s.host)
+		if target == "" {
+			return fail(exitUsage, "invalid host %q", s.host)
+		}
+		hosts[target] = true
 	}
 	var names []string
 	for h := range hosts {
@@ -529,7 +673,11 @@ func cmdRun(args []string) error {
 			defer wg.Done()
 			p, err := requestSecret(cfg, key, h, *reason, *timeout, func() {
 				once.Do(func() {
-					fmt.Fprintf(stderr, "Waiting for approval of %s on your phone…\n", strings.Join(names, ", "))
+					described := make([]string, len(names))
+					for i, n := range names {
+						described[i] = describeTarget(n)
+					}
+					fmt.Fprintf(stderr, "Waiting for approval of %s on your phone…\n", strings.Join(described, ", "))
 				})
 			})
 			mu.Lock()
@@ -546,7 +694,7 @@ func cmdRun(args []string) error {
 	}
 	env := os.Environ()
 	for _, s := range specs {
-		value, err := pick(payloads[normalizeHost(s.host)].Item, s.field)
+		value, err := pick(payloads[resolveTarget(s.host)].Item, s.field)
 		if err != nil {
 			return err
 		}

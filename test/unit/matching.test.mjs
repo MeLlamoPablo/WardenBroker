@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { load } from './bundle.mjs'
 
 const bw = await load('web/src/bw.ts')
-const item = (name, ...uris) => ({ id: name, name, uris: uris.map((u) => (typeof u === 'string' ? { uri: u, match: null } : u)), fields: [], username: '', password: '', totp: '', notes: '', organization: null, type: 1 })
+const item = (name, ...uris) => ({ id: name, name, uris: uris.map((u) => (typeof u === 'string' ? { uri: u, match: null } : u)), fields: [], username: '', password: '', totp: '', notes: '', card: null, organization: null, type: 1 })
 
 test('baseDomain handles common second-level suffixes', () => {
   assert.equal(bw.baseDomain('api.github.com'), 'github.com')
@@ -29,6 +29,24 @@ test('candidatesFor auto-picks only an unambiguous best match', () => {
   assert.equal(bw.candidatesFor(vault, 'gist.github.com').autoPick, null, 'two same-domain items tie')
   assert.equal(bw.candidatesFor(vault, 'gist.github.com').items.length, 2)
   assert.equal(bw.candidatesFor(vault, 'nope.dev').items.length, 0)
+})
+
+test('card items decrypt their card fields, and every card is a candidate', async () => {
+  const userKey = bw.symKey(crypto.getRandomValues(new Uint8Array(64)))
+  const enc = (v) => bw.encryptString(v, userKey)
+  const sync = bw.camelize({
+    Profile: { Email: 'a@b.c' },
+    Ciphers: [
+      { Id: 'c1', Type: 3, Name: await enc('Visa'), Card: { CardholderName: await enc('Ada'), Brand: await enc('Visa'), Number: await enc('4111111111111111'), ExpMonth: await enc('3'), ExpYear: await enc('2029'), Code: await enc('123') }, Fields: [] },
+      { Id: 'l1', Type: 1, Name: await enc('Shop'), Login: { Password: await enc('pw'), Uris: [{ Uri: await enc('https://shop.example'), Match: null }] } },
+    ],
+  })
+  const items = await bw.decryptVault(sync, userKey)
+  const card = items.find((i) => i.id === 'c1')
+  assert.deepEqual(card.card, { cardholderName: 'Ada', brand: 'Visa', number: '4111111111111111', expMonth: '3', expYear: '2029', code: '123' })
+  assert.equal(items.find((i) => i.id === 'l1').card, null)
+  assert.deepEqual(bw.cardCandidates(items).map((i) => i.id), ['c1'])
+  assert.equal(bw.candidatesFor(items, 'shop.example').items.some((i) => i.card), false, 'cards never match a host')
 })
 
 test('camelize normalises PascalCase server responses', () => {

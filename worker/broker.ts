@@ -4,6 +4,8 @@
 import { DurableObject } from 'cloudflare:workers'
 import { bwProxy } from './bitwarden'
 import {
+  CARD_TARGET,
+  describeTarget,
   fingerprint,
   fromB64,
   HttpError,
@@ -604,9 +606,8 @@ export class Broker extends DurableObject<Env> {
 
   private async agentRequest(c: Ctx): Promise<Response> {
     const agent = await this.agent(c)
-    const body = await this.body<{ host?: string; reason?: string }>(c.req)
-    const host = normalizeHost(String(body.host || ''))
-    if (!host) throw new HttpError(400, 'host is required')
+    const body = await this.body<{ kind?: string; host?: string; reason?: string }>(c.req)
+    const host = requestTarget(body)
     const reason = String(body.reason || '').trim()
     if (!reason) throw new HttpError(400, 'a reason is required: tell the user why you need this secret')
     if (reason.length > 500) throw new HttpError(400, 'reason must be at most 500 characters')
@@ -624,7 +625,7 @@ export class Broker extends DurableObject<Env> {
     const t = now()
     this.run("INSERT INTO requests (id, agent_id, host, reason, status, created_at, expires_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)", id, agent.id, host, reason, t, t + REQUEST_TTL)
     this.log('secret.requested', { agentId: agent.id as string, agentName: agent.name as string, host, detail: reason })
-    this.ctx.waitUntil(this.notify({ title: `${agent.name} needs ${host}`, body: reason, tag: `req-${id}` }))
+    this.ctx.waitUntil(this.notify({ title: `${agent.name} needs ${describeTarget(host)}`, body: reason, tag: `req-${id}` }))
     return json({ id, status: 'pending', host }, 202)
   }
 
@@ -647,6 +648,23 @@ export class Broker extends DurableObject<Env> {
     if (request.status === 'delivered') return json({ id: request.id, status: 'delivered', host: request.host }, 410)
     return json({ id: request.id, status: request.status, host: request.host })
   }
+}
+
+/**
+ * What a request asks for: a host (kind "host", the default), or a payment card
+ * (kind "card"). Cards are never matched by host, so a card request must not
+ * name one; the user always picks the card on their phone.
+ */
+function requestTarget(body: { kind?: string; host?: string }): string {
+  const kind = body.kind ?? 'host'
+  if (kind === 'card') {
+    if (body.host) throw new HttpError(400, 'card requests take no host: the user picks the card on their phone')
+    return CARD_TARGET
+  }
+  if (kind !== 'host') throw new HttpError(400, 'kind must be "host" or "card"')
+  const host = normalizeHost(String(body.host || ''))
+  if (!host) throw new HttpError(400, 'host is required')
+  return host
 }
 
 function describeDuration(seconds: number): string {

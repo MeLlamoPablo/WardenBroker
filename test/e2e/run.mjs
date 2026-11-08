@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import assert from 'node:assert/strict'
-import { ACCOUNT, ITEM_TOTP_SECRET, startMockBitwarden, totp } from './mock-bitwarden.mjs'
+import { ACCOUNT, CARDS, ITEM_TOTP_SECRET, startMockBitwarden, totp } from './mock-bitwarden.mjs'
 import { decryptPush, fakeSubscription } from './push.mjs'
 
 const require = createRequire(import.meta.url)
@@ -332,6 +332,40 @@ async function main() {
     assert.equal(get.stdout.trim(), 'org-db-pass')
   })
 
+  await step('a card request names no host, lists every card and never auto-picks one', async () => {
+    const pushed = new Promise((resolve) => (bw.state.onPush = resolve))
+    const card = cli(['card', '--json', '--reason', 'pay for order #1234 at shop.example'])
+    await card.waitFor(/pick a card on your phone/)
+    const push = await Promise.race([pushed, sleep(10000).then(() => null)])
+    assert.ok(push, 'push delivered')
+    assert.equal(JSON.parse(await decryptPush(push.body, sub)).title, 'e2e-agent needs a payment card')
+    const pending = await page.evaluate(async () => (await (await fetch('/api/app/state')).json()).pendingRequests)
+    assert.equal(pending[0].host, '@card', 'the request carries no host')
+    await reload()
+    await page.locator('h2.host', { hasText: 'Payment card' }).waitFor()
+    await page.getByText('Pick a card to share:').waitFor()
+    await page.getByRole('button', { name: /^Personal Visa\s*Visa •••• 1111/ }).waitFor()
+    await page.getByRole('button', { name: /^Claw Credit Card\s*Mastercard •••• 4444/ }).waitFor()
+    assert.equal(await page.locator('.item-list .item').count(), 2, 'only cards are listed')
+    assert.ok(await button('Approve').isDisabled(), 'no card is picked for the user')
+    await shot('card-request')
+    await page.getByRole('button', { name: /^Claw Credit Card/ }).click()
+    await page.getByText('Shares card number, cardholder, expiry, security code').waitFor()
+    await approve('Payment card')
+    assert.equal(await finished(card), 0, card.stderr)
+    const item = JSON.parse(card.stdout)
+    assert.equal(item.name, CARDS.claw.name)
+    const { name, ...fields } = CARDS.claw
+    assert.deepEqual(item.card, fields)
+  })
+
+  await step('`run` reads card fields from @card, served from the card grant', async () => {
+    const run = cli(['run', '--reason', 'fill the payment form', '-e', 'NUM=@card', '-e', 'EXP=@card:expiry', '-e', 'CVV=@card:cvv', '--', 'sh', '-c', 'echo "$NUM $EXP $CVV"'])
+    assert.equal(await finished(run, 5000), 0, run.stderr)
+    assert.ok(!run.stderr.includes('Waiting'), 'served from the grant')
+    assert.equal(run.stdout.trim(), '5555555555554444 12/30 321')
+  })
+
   await step('`run` injects secrets into a child process environment', async () => {
     const run = cli(['run', '--reason', 'deploy', '-e', 'GL=gitlab.com', '-e', 'GH_USER=github.com:username', '--', 'sh', '-c', 'echo "$GL/$GH_USER"; exit 7'])
     await run.waitFor(/Waiting for approval/)
@@ -361,6 +395,7 @@ async function main() {
     await page.getByRole('button', { name: /e2e-agent/ }).click()
     const grant = page.locator('.grants li', { hasText: 'github.com' })
     await grant.waitFor()
+    await page.locator('.grants li', { hasText: 'Payment card → Claw Credit Card' }).waitFor()
     await shot('agent-detail')
     await grant.getByRole('button', { name: 'Revoke' }).click()
     await grant.waitFor({ state: 'detached' })
@@ -376,6 +411,8 @@ async function main() {
     await page.getByText('Shared github.com with e2e-agent').first().waitFor()
     await page.getByText('e2e-agent used its access to github.com').first().waitFor()
     await page.getByText('Denied nothing.example to e2e-agent').waitFor()
+    await page.getByText('e2e-agent asked for a payment card').waitFor()
+    await page.getByText('Shared a payment card with e2e-agent').waitFor()
     await page.getByText("Revoked e2e-agent's access to github.com").waitFor()
   })
 
@@ -388,7 +425,7 @@ async function main() {
     assert.equal(state.status, 401)
     await button('Unlock with passkey').click()
     await page.getByText('Agents', { exact: true }).waitFor()
-    await page.getByText(/7 vault items · synced/).waitFor()
+    await page.getByText(/9 vault items · synced/).waitFor()
   })
 
   await step('a fresh page load requires the passkey again', async () => {
@@ -404,7 +441,7 @@ async function main() {
     // written back into the passkey-encrypted blob.
     const refreshes = bw.state.requests.filter((r) => r.path === '/identity/connect/token').length
     assert.ok(refreshes >= 4, `expected logins + refreshes, saw ${refreshes}`)
-    await page.getByText(/7 vault items · synced/).waitFor()
+    await page.getByText(/9 vault items · synced/).waitFor()
     assert.equal(await page.getByText(/Bitwarden session expired/).count(), 0)
   })
 
@@ -459,11 +496,16 @@ async function main() {
     const cfg = JSON.parse(execFileSync('cat', [join(TMP, 'agent.json')]).toString())
     const noReason = await api('/api/agent/requests', { method: 'POST', headers: { authorization: `Bearer ${cfg.token}` }, body: { host: 'a.com' } })
     assert.equal(noReason.status, 400)
+    const auth = { authorization: `Bearer ${cfg.token}` }
+    const cardWithHost = await api('/api/agent/requests', { method: 'POST', headers: auth, body: { kind: 'card', host: 'shop.example', reason: 'x' } })
+    assert.equal(cardWithHost.status, 400, 'card requests take no host')
+    const badKind = await api('/api/agent/requests', { method: 'POST', headers: auth, body: { kind: 'ssh', reason: 'x' } })
+    assert.equal(badKind.status, 400)
   })
 
   await step('the broker only ever stores ciphertext', async () => {
     const dump = execFileSync('sh', ['-c', `find ${join(TMP, 'state')} -type f -exec cat {} + | strings`], { maxBuffer: 64 << 20 }).toString()
-    for (const secret of ['gh-pass-123', 'gl-pass-456', 'sk-test-789', 'org-db-pass', 'example-c', ACCOUNT.password]) {
+    for (const secret of ['gh-pass-123', 'gl-pass-456', 'sk-test-789', 'org-db-pass', 'example-c', CARDS.claw.number, CARDS.personal.number, ACCOUNT.password]) {
       assert.ok(!dump.includes(secret), `${secret} must not appear in broker storage`)
     }
   })

@@ -82,6 +82,19 @@ export function now(): number {
 }
 
 /**
+ * The target of a card request. Cards aren't tied to a site, so card requests
+ * carry no host: the user picks the card every time. It is stored where a host
+ * would be (grants, logs, the seal's associated data) and can never collide
+ * with a real host, because normalizeHost never returns an "@".
+ */
+export const CARD_TARGET = '@card'
+
+/** How a request target reads in a sentence ("claw needs …"). */
+export function describeTarget(target: string): string {
+  return target === CARD_TARGET ? 'a payment card' : target
+}
+
+/**
  * Normalises whatever an agent passes as "host" (a bare host, a URL, host:port)
  * into a lowercase hostname. Returns null when nothing sensible is left.
  */

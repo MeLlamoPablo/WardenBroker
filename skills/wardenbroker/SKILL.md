@@ -30,6 +30,8 @@ wardenbroker register --url <broker url> --name <a name for this agent>
 3. **Give a specific, honest reason.** The user reads it on their lock screen. "Push the v2.3 release tag to GitHub" is
    good; "need access" will (rightly) get denied.
 4. **Ask for the narrowest host** that does the job (`api.github.com`, not every GitHub item).
+   **Payment cards are the exception: use `wardenbroker card`, never the shop's host.** Cards aren't tied to a website;
+   the user picks which card to share. Put the merchant, the item and the amount in the reason.
 5. **Don't echo, log or commit secret values.** If you used `get`, don't repeat the output in your reply.
 6. **A denial is an answer.** Exit code `3` means the user said no. Don't retry in a loop; tell the user what you were
    trying to do and continue without it or ask how to proceed.
@@ -49,12 +51,20 @@ wardenbroker get github.com --field username --reason "..."
 wardenbroker get github.com --field totp --reason "..."        # current 2FA code
 wardenbroker get api.openai.com --field "API Key" --reason "..." # a custom field
 
+# Payment cards: no host, the user picks the card on their phone
+wardenbroker card --json --reason "Pay Xbox Game Pass, 3 months (17.99 EUR) at instant-gaming.com"
+wardenbroker card --field cvv --reason "..."   # number (default), cardholder, brand, expiry (MM/YY), exp-month, exp-year, cvv
+wardenbroker run --reason "..." -e NUMBER=@card -e EXPIRY=@card:expiry -e CVV=@card:cvv -- ./pay.sh
+
 # Check this machine's registration
 wardenbroker status
 ```
 
 `-e VAR=host[:field]` takes the same field names as `--field`: `password`, `username`, `totp`, `totp-seed`, `notes`,
-`uri`, or the name of a custom field.
+`uri`, or the name of a custom field. Use `@card` as the host for a payment card.
+
+After the first approval, further requests are answered from the grant without asking again, so fetching a card's
+fields one by one (number, expiry, cvv) only asks the user once.
 
 Requests wait up to 10 minutes for the user (`--timeout` to change). Say so before running one: "I've asked for
 access to github.com on your phone."

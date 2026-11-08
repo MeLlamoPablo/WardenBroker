@@ -19,6 +19,18 @@ export interface SymKey {
   mac: Uint8Array<ArrayBuffer>
 }
 
+/** Bitwarden cipher types. */
+export const CipherType = { Login: 1, SecureNote: 2, Card: 3, Identity: 4, SshKey: 5 } as const
+
+export interface Card {
+  cardholderName: string
+  brand: string
+  number: string
+  expMonth: string
+  expYear: string
+  code: string
+}
+
 export interface VaultItem {
   id: string
   type: number
@@ -29,6 +41,8 @@ export interface VaultItem {
   uris: { uri: string; match: number | null }[]
   notes: string
   fields: { name: string; value: string }[]
+  /** Set for card items (type 3), which keep their data here rather than in `login`. */
+  card: Card | null
   organization: string | null
 }
 
@@ -208,6 +222,7 @@ export async function decryptVault(sync: SyncData, userKey: SymKey): Promise<Vau
       if (c.key) key = symKey(await decryptBytes(c.key, key))
       const dec = (s: string | null | undefined) => decryptString(s, key!)
       const login = c.login || {}
+      const card = c.type === CipherType.Card && c.card ? c.card : null
       items.push({
         id: c.id,
         type: c.type,
@@ -218,6 +233,16 @@ export async function decryptVault(sync: SyncData, userKey: SymKey): Promise<Vau
         uris: await Promise.all((login.uris || []).map(async (u: any) => ({ uri: await dec(u.uri), match: u.match ?? null }))),
         notes: await dec(c.notes),
         fields: await Promise.all((c.fields || []).map(async (f: any) => ({ name: await dec(f.name), value: await dec(f.value) }))),
+        card: card
+          ? {
+              cardholderName: await dec(card.cardholderName),
+              brand: await dec(card.brand),
+              number: await dec(card.number),
+              expMonth: await dec(card.expMonth),
+              expYear: await dec(card.expYear),
+              code: await dec(card.code),
+            }
+          : null,
         organization: c.organizationId ? orgNames.get(c.organizationId) || 'Organization' : null,
       })
     } catch (err) {
@@ -277,6 +302,11 @@ export function candidatesFor(items: VaultItem[], host: string): { items: VaultI
   const best = scored.filter((s) => s.score === top).map((s) => s.item)
   const all = [...best, ...scored.filter((s) => s.score !== top).map((s) => s.item)]
   return { items: all, autoPick: best.length === 1 ? best[0] : null }
+}
+
+/** Card requests are never matched: every card in the vault is a candidate and the user always picks one. */
+export function cardCandidates(items: VaultItem[]): VaultItem[] {
+  return items.filter((item) => item.card)
 }
 
 // ------------------------------------------------------------------ network

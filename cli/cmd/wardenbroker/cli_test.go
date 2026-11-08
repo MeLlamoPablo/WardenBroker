@@ -85,6 +85,58 @@ func TestPick(t *testing.T) {
 	}
 }
 
+func TestPickCard(t *testing.T) {
+	card := Item{Name: "Visa", Card: &Card{CardholderName: "Ada Lovelace", Brand: "Visa", Number: "4111111111111111", ExpMonth: "3", ExpYear: "2029", Code: "123"}}
+	for field, want := range map[string]string{
+		"":           "4111111111111111", // a card's main secret is its number
+		"number":     "4111111111111111",
+		"cardholder": "Ada Lovelace",
+		"brand":      "Visa",
+		"cvv":        "123",
+		"CVC":        "123",
+		"exp-month":  "03",
+		"exp-year":   "2029",
+		"expiry":     "03/29",
+	} {
+		if got, err := pick(card, field); err != nil || got != want {
+			t.Errorf("%q: got %q, %v; want %q", field, got, err, want)
+		}
+	}
+	short := Item{Name: "MC", Card: &Card{Number: "5555", ExpMonth: "11", ExpYear: "31"}}
+	if got, _ := pick(short, "exp-year"); got != "2031" {
+		t.Errorf("two-digit year: got %q", got)
+	}
+	if got, _ := pick(short, "expiry"); got != "11/31" {
+		t.Errorf("expiry: got %q", got)
+	}
+	if _, err := pick(short, "cvv"); err == nil {
+		t.Error("missing cvv must error")
+	}
+	if _, err := pick(Item{Name: "x", Card: &Card{ExpMonth: "1", ExpYear: "7"}}, "expiry"); err == nil {
+		t.Error("a malformed year must error, not panic")
+	}
+	login := Item{Name: "Shop", Fields: []Field{{Name: "Number", Value: "42"}}}
+	if got, err := pick(login, "number"); err != nil || got != "42" {
+		t.Errorf("a login's custom field named like a card field: got %q, %v", got, err)
+	}
+}
+
+func TestResolveTarget(t *testing.T) {
+	for in, want := range map[string]string{"@card": cardTarget, " @CARD ": cardTarget, "card": "card", "https://shop.example/pay": "shop.example"} {
+		if got := resolveTarget(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestCardSealIsBoundToTheCardTarget(t *testing.T) {
+	priv, _ := ecdh.P256().GenerateKey(rand.Reader)
+	blob := sealForTest(t, priv.PublicKey(), "shop.example", []byte("{}"))
+	if _, err := openSealed(priv, cardTarget, blob); err == nil {
+		t.Fatal("a secret sealed for a host must not open as a card")
+	}
+}
+
 func TestFingerprintMatchesBrokerFormat(t *testing.T) {
 	fp := fingerprint([]byte("x"))
 	if len(fp) != 19 || fp[4] != '-' {

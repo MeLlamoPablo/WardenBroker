@@ -82,6 +82,8 @@ test('normalizeHost', () => {
   assert.equal(util.normalizeHost('db.example.com:5432'), 'db.example.com')
   assert.equal(util.normalizeHost(''), null)
   assert.equal(util.normalizeHost('http://'), null)
+  assert.notEqual(util.normalizeHost(util.CARD_TARGET), util.CARD_TARGET, 'no host normalises to the card target')
+  assert.notEqual(util.normalizeHost('https://@card'), util.CARD_TARGET)
 })
 
 // The Workers Free plan allows 10ms of CPU per request. Everything we do per
